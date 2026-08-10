@@ -1,0 +1,6 @@
+test.ipynb
+keyframes.json
+src/browzarr/web/dist
+src/browzarr.egg-info
+src/browzarr/__pycache__
+__pycache__
