@@ -3,16 +3,23 @@ import time
 import urllib.parse
 import json
 import webbrowser
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from .export import Export
 from typing import Any
 import xarray as xr
 from .server_utils import find_free_port, get_dist_dir, make_handler, DEFAULT_START_PORT
-from .plottypes import Volume, Points, Flat, Sphere, snake_to_camel
+from .plot_types import Volume, Points, Flat, Sphere, snake_to_camel
 import socketserver
 import os
 import subprocess
 import numpy as np
+import importlib.resources
+import shutil
+import tarfile
+import tempfile
+import urllib.request
+from pathlib import Path
+from typing_extensions import Unpack
 
 def _in_jupyter() -> bool:
     """True if running inside a Jupyter/IPython kernel (notebook or lab)."""
@@ -82,7 +89,7 @@ class BrowzarrSession:
             cls._port = None
 
 def isNC(path: str):
-    return any([nc in path for nc in [".nc", ".nc4", ".netcdf"]])
+    return any(nc in path for nc in (".nc", ".nc4", ".netcdf"))
 
 # dataclass generates all __init__ and self values boilerplate. Just list all potential fields. 
 @dataclass
@@ -99,18 +106,18 @@ class Browzarr:
     extra_params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        self.export_plot = False
+        self.reproject = False
+        self._export_state = None
         if not isinstance(self.dataset, str):
             self._parse_xr_object()
             return
         if self.variable == None:
             raise ValueError("Variable must be included when using a dataset path")
+        
         self.init_store = self.dataset
-        self.export_plot = False
-        self.reproject = False
-        self._export_state = None
     def _parse_xr_object(self) -> None:
         store = self.dataset
-
         def parse_da(da: xr.DataArray) -> None:
             # Check if it has been sliced. If so, indexes will be erroneous
             original_shape = tuple(da.encoding.get("original_shape"))
@@ -146,19 +153,19 @@ class Browzarr:
         return
 
     # ---- Plot Functions ---- #
-    def volume(self, **kwargs: Any) -> "Browzarr":
+    def volume(self, **kwargs: Volume) -> "Browzarr":
         self._plot_state = Volume(**kwargs)
         return self
- 
-    def points(self, **kwargs: Any) -> "Browzarr":
+
+    def points(self, **kwargs: Points) -> "Browzarr":
         self._plot_state = Points(**kwargs)
         return self
- 
-    def flat(self, **kwargs: Any) -> "Browzarr":
+
+    def flat(self, **kwargs: Flat) -> "Browzarr":
         self._plot_state = Flat(**kwargs)
         return self
- 
-    def sphere(self, **kwargs: Any) -> "Browzarr":
+
+    def sphere(self, **kwargs: Sphere) -> "Browzarr":
         self._plot_state = Sphere(**kwargs)
         return self
 
@@ -213,18 +220,22 @@ class Browzarr:
     # ---- Query from States ---- #
     def _build_query(self) -> str:
         es = self._build_export_state()
+        plot_spec = self._plot_state.to_spec() if self._plot_state is not None else {}
         ## Exclude parameters if the 
         full_obj = {
             "globalState": self._build_global_state(),
-            "plotState": self._plot_state.to_spec() if self._plot_state is not None else None,
+            "plotState": plot_spec,
             "zarrState": self._build_zarr_state(),
             **({"exportState": es} if len(es) > 0 else {}),
         }
         ## Reproject if dst_CRS and native_CRS provided
-        if (self._plot_state.native_CRS is not None and 
-            self._plot_state.dest_CRS is not None):
+        if (self._plot_state is not None
+            and getattr(self._plot_state, "native_CRS", None) is not None
+            and getattr(self._plot_state, "dest_CRS", None) is not None):
             self.reproject = True
+
         full_obj["plotState"].update(self.extra_params)
+        
         kfp = self._export_state.keyframes_path if self._export_state is not None else None
         return urllib.parse.urlencode({"data": json.dumps(full_obj), 
                                        "store":self.init_store, 
@@ -234,58 +245,39 @@ class Browzarr:
                                        })
 
     # ---- Dataslicers ----#
-    def _align_slices_to_shape(self, slices_by_dim: dict):
-        order = self.axis_mapping
-        nd_slices = []
-        for dim in order:
-            if dim in slices_by_dim:
-                this_slice = slices_by_dim[dim]
-                nd_slices.append(this_slice)
+    def _resolve_slices(self, indexers: dict, positional: bool) -> list[tuple]:
+        da = self.dataset
+        if not isinstance(da, xr.DataArray):
+            raise ValueError("Incorrect dataset type passed into class")
+
+        slices_by_dim: dict[int, tuple] = {}
+        for dim, key in indexers.items():
+            if dim not in da.dims:
+                raise ValueError(f"{dim} is not a valid dimension")
+
+            axis = da.get_axis_num(dim)
+
+            if positional:
+                start, stop = key.start, key.stop
             else:
-                nd_slices.append((0, None))
-        return nd_slices
+                index = da.get_index(dim)
+                indexer = index.slice_indexer(key.start, key.stop)
+                start, stop = indexer.start, indexer.stop
+                start = start.item() if isinstance(start, np.integer) else start
+                stop = stop.item() if isinstance(stop, np.integer) else stop
+
+            slices_by_dim[axis] = (start, stop)
+
+        return self._align_slices_to_shape(slices_by_dim)
 
     def sel(self, **indexers) -> "Browzarr":
-        da = self.dataset
-        if not isinstance(da, xr.DataArray):
-            raise ValueError("Incorrect dataset type passed into class")
-
-        slices_by_dim = {}
-        for dim, key in indexers.items():
-            if dim not in da.dims:
-                raise ValueError(f"{dim} is not a valid dimension")
-            
-            this_dim = da.get_index(dim)
-            this_index = da._get_axis_num(dim)
-            print(this_index)
-            if this_index is None:
-                raise ValueError(f"{dim} has no index")
-            
-            indexer = this_dim.slice_indexer(key.start, key.stop)
-            start = indexer.start
-            stop = indexer.stop
-            start = start.item() if isinstance(start, np.integer) else start
-            stop = stop.item() if isinstance(stop, np.integer) else stop
-            slices_by_dim[this_index] = (start, stop)
-
-        self.ndSteps = self._align_slices_to_shape(slices_by_dim)
-        print(self.ndSteps)
+        z, y, x = self._resolve_slices(indexers, positional=False)
+        self.z_slice, self.y_slice, self.x_slice = z, y, x
         return self
-            
+
     def isel(self, **indexers) -> "Browzarr":
-        da = self.dataset
-        if not isinstance(da, xr.DataArray):
-            raise ValueError("Incorrect dataset type passed into class")
-        slices_by_dim = {}
-        for dim, key in indexers.items():
-            if dim not in da.dims:
-                raise ValueError(f"{dim} is not a valid dimension")
-            this_index = da._get_axis_num(dim)
-            if this_index is None:
-                raise ValueError(f"{dim} has no index")
-            slices_by_dim[this_index] = (key.start, key.stop)
-        self.ndSteps = self._align_slices_to_shape(slices_by_dim)
-        print(self.ndSteps)
+        z, y, x = self._resolve_slices(indexers, positional=True)
+        self.z_slice, self.y_slice, self.x_slice = z, y, x
         return self
 
 
@@ -312,6 +304,88 @@ class Browzarr:
                 pass  # opened in VS Code's built-in tab
             else:
                 webbrowser.open(url)
-        else:
-            return url
 
+        return url
+
+
+def _check_pnpm():
+    try:
+        subprocess.run(["pnpm", "--version"], check=True, shell=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+    
+def build_browzarr():
+    if not _check_pnpm():
+        print('''
+        pnpm not installed. Install it then run again
+        https://pnpm.io/installation
+        ''')
+        return
+    base_path = ""
+    dist_dir = importlib.resources.files("browzarr") / "web" / "dist"
+    dist_path = Path(str(dist_dir))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        tarball = tmp_path / "source.tar.gz"
+
+        print("Downloading source from GitHub...")
+        urllib.request.urlretrieve(
+            "https://codeload.github.com/EarthyScience/Browzarr/tar.gz/refs/heads/main",
+            tarball,
+        )
+
+        print("Extracting...")
+        with tarfile.open(tarball) as tar:
+            tar.extractall(tmp_path)
+
+        extracted_root = next(tmp_path.glob("Browzarr-*"))
+        print("Installing dependencies with pnpm...")
+        subprocess.run(["pnpm", "install"], cwd=extracted_root, check=True, shell=True)
+
+        subprocess.run(
+            ["pnpm", "run", "build"],
+            cwd=extracted_root,
+            check=True,
+            env={**os.environ, "BASE_PATH": base_path},
+            shell=True
+        )
+
+        built_out = extracted_root / "out"
+
+        if dist_path.exists():
+            shutil.rmtree(dist_path)
+
+        dist_path.parent.mkdir(parents=True, exist_ok=True)
+
+        print("Copying built distribution...")
+        shutil.copytree(built_out, dist_path)
+
+    print("Browzarr distribution updated successfully!")
+
+def update_browzarr():
+    dist_dir = importlib.resources.files("browzarr") / "web" / "dist"
+    dist_path = Path(str(dist_dir))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        tarball = tmp_path / "python-dist.tar.gz"
+        print("Downloading from github...")
+        urllib.request.urlretrieve(
+            "https://codeload.github.com/EarthyScience/Browzarr/tar.gz/refs/heads/python-dist",
+            tarball,
+        )
+        print("Extracting...")
+        with tarfile.open(tarball) as tar:
+            tar.extractall(tmp_path)
+
+        extracted_root = next(tmp_path.glob("Browzarr-python-dist*"))
+
+        if dist_path.exists():
+            shutil.rmtree(dist_path)
+        dist_path.parent.mkdir(parents=True, exist_ok=True)
+
+        shutil.copytree(extracted_root, dist_path)
+    print("Succesfully updated Browzarr distribution")
+    

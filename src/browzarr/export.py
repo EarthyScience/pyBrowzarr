@@ -1,5 +1,5 @@
 from dataclasses import dataclass, asdict
-from .plottypes import snake_to_camel
+from .plot_types import snake_to_camel
 
 
 @dataclass

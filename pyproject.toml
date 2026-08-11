@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [
     { name = "Jeran Poehls" }
 ]
-dependencies = ["pywebview>=5.0", "xarray"]
+dependencies = ["pywebview>=5.0", "xarray", "numpy"]
 
 [project.scripts]
 browzarr = "browzarr:main"
