@@ -3,23 +3,29 @@ import time
 import urllib.parse
 import json
 import webbrowser
-from dataclasses import dataclass, field, asdict
-from .export import Export
-from typing import Any
-import xarray as xr
+from dataclasses import dataclass, field
+from typing import Any, Unpack
 from .server_utils import find_free_port, get_dist_dir, make_handler, DEFAULT_START_PORT
-from .plot_types import Volume, Points, Flat, Sphere, snake_to_camel
+from .method_types import Volume, Points, Flat, Sphere, Export
 import socketserver
 import os
 import subprocess
-import numpy as np
 import importlib.resources
 import shutil
 import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing_extensions import Unpack
+import re
+
+def to_spec(param_dict, plot_type: str = None) -> dict:
+        """Serialize to the JSON blob the JS frontend expects."""
+        param_dict = {"plot_type": plot_type, **param_dict} if plot_type is not None else {}
+        return {snake_to_camel(k): v for k, v in param_dict.items() if v is not None}
+
+
+def snake_to_camel(s: str) -> str:
+    return re.sub(r'_([a-zA-Z])', lambda m: m.group(1).upper(), s)
 
 def _in_jupyter() -> bool:
     """True if running inside a Jupyter/IPython kernel (notebook or lab)."""
@@ -56,7 +62,6 @@ class BrowzarrSession:
     Holds a single running local server so repeated .plot() calls
     from the same session reuse it instead of spawning duplicates.
     """
-
     _port: int | None = None
     _httpd: socketserver.TCPServer | None = None
     _thread: threading.Thread | None = None
@@ -91,15 +96,17 @@ class BrowzarrSession:
 def isNC(path: str):
     return any(nc in path for nc in (".nc", ".nc4", ".netcdf"))
 
+
+
 # dataclass generates all __init__ and self values boilerplate. Just list all potential fields. 
 @dataclass
 class Browzarr:
     """
     User-facing config object. Set attributes (or use kwargs), then
-    call .plot() to launch a preconfigured Browzarr view.
+    chain operators. When satisfied, call .plot() to launch a preconfigured Browzarr view.
     """
-    dataset: str | xr.Dataset | xr.DataArray
-    variable: str | None = None
+    dataset: str 
+    variable: str 
     x_slice: tuple[int, int | None] = (0, None)
     y_slice: tuple[int, int | None] = (0, None)
     z_slice: tuple[int, int | None] = (0, None)
@@ -108,72 +115,31 @@ class Browzarr:
     def __post_init__(self) -> None:
         self.export_plot = False
         self.reproject = False
-        self._export_state = None
-        if not isinstance(self.dataset, str):
-            self._parse_xr_object()
-            return
-        if self.variable == None:
-            raise ValueError("Variable must be included when using a dataset path")
-        
+        self._export_state = None        
         self.init_store = self.dataset
-    def _parse_xr_object(self) -> None:
-        store = self.dataset
-        def parse_da(da: xr.DataArray) -> None:
-            # Check if it has been sliced. If so, indexes will be erroneous
-            original_shape = tuple(da.encoding.get("original_shape"))
-            this_shape = da.shape
-            if len(this_shape) > 3:
-                raise ValueError("Too many dimensions. Reduce to 3")
-            if any([val not in original_shape for val in this_shape]):
-                raise LookupError(
-                    """
-                    Cannot infer slice range from pre-sliced DataArray. 
-                    Pass unsliced DataArray and use .sel() method 
-                    e.g., Browzarr(da).sel()/.isel()
-                    """
-                )
-            self.axis_mapping = [original_shape.index(x) for x in this_shape]
-            self.variable = da.name
-            self.init_store = da.encoding.get("source")
-        
-        #Handle DataArray
-        if isinstance(store, xr.DataArray):
-            da = store
-            parse_da(da)
-            return
-        #Handle DataSet
-        if self.variable == None:
-            raise ValueError("Variable must be included when using a dataset")
-        var = self.variable
-        if var not in store.variables:
-            raise LookupError("Variable not found in Dataset")
-        da = store[var]
-        parse_da(da)
-        self.dataset = da
-        return
 
     # ---- Plot Functions ---- #
-    def volume(self, **kwargs: Volume) -> "Browzarr":
-        self._plot_state = Volume(**kwargs)
+    def volume(self, **kwargs: Unpack[Volume]) -> "Browzarr":
+        self._plot_state = to_spec({**kwargs}, 'volume')
         return self
 
-    def points(self, **kwargs: Points) -> "Browzarr":
-        self._plot_state = Points(**kwargs)
+    def points(self, **kwargs: Unpack[Points]) -> "Browzarr":
+        self._plot_state = to_spec({**kwargs}, 'point-cloud')
         return self
 
-    def flat(self, **kwargs: Flat) -> "Browzarr":
-        self._plot_state = Flat(**kwargs)
+    def flat(self, **kwargs: Unpack[Flat]) -> "Browzarr":
+        self._plot_state = to_spec({**kwargs}, 'flat')
         return self
 
-    def sphere(self, **kwargs: Sphere) -> "Browzarr":
-        self._plot_state = Sphere(**kwargs)
+    def sphere(self, **kwargs: Unpack[Sphere]) -> "Browzarr":
+        self._plot_state = to_spec({**kwargs}, 'sphere')
         return self
 
     # ---- Export Functions ---- #
-    def export(self, **kwargs: Any) -> "Browzarr":
-        self._export_state = Export(**kwargs)
+    def export(self, open_browser:bool = True, **kwargs: Unpack[Export]) -> "Browzarr":
+        self._export_state = to_spec({**kwargs})
         self.export_plot = True
-        return self.plot(open_browser = False)
+        return self.plot(open_browser = open_browser)
     # ---- Build States ---- #
     def _build_global_state(self) -> dict[str, Any]:
         state: dict[str, Any] = {}
@@ -220,7 +186,7 @@ class Browzarr:
     # ---- Query from States ---- #
     def _build_query(self) -> str:
         es = self._build_export_state()
-        plot_spec = self._plot_state.to_spec() if self._plot_state is not None else {}
+        plot_spec = self._plot_state if self._plot_state is not None else {}
         ## Exclude parameters if the 
         full_obj = {
             "globalState": self._build_global_state(),
@@ -244,44 +210,8 @@ class Browzarr:
                                        **({"keyFramesPath": kfp} if kfp is not None else {}),
                                        })
 
-    # ---- Dataslicers ----#
-    def _resolve_slices(self, indexers: dict, positional: bool) -> list[tuple]:
-        da = self.dataset
-        if not isinstance(da, xr.DataArray):
-            raise ValueError("Incorrect dataset type passed into class")
 
-        slices_by_dim: dict[int, tuple] = {}
-        for dim, key in indexers.items():
-            if dim not in da.dims:
-                raise ValueError(f"{dim} is not a valid dimension")
-
-            axis = da.get_axis_num(dim)
-
-            if positional:
-                start, stop = key.start, key.stop
-            else:
-                index = da.get_index(dim)
-                indexer = index.slice_indexer(key.start, key.stop)
-                start, stop = indexer.start, indexer.stop
-                start = start.item() if isinstance(start, np.integer) else start
-                stop = stop.item() if isinstance(stop, np.integer) else stop
-
-            slices_by_dim[axis] = (start, stop)
-
-        return self._align_slices_to_shape(slices_by_dim)
-
-    def sel(self, **indexers) -> "Browzarr":
-        z, y, x = self._resolve_slices(indexers, positional=False)
-        self.z_slice, self.y_slice, self.x_slice = z, y, x
-        return self
-
-    def isel(self, **indexers) -> "Browzarr":
-        z, y, x = self._resolve_slices(indexers, positional=True)
-        self.z_slice, self.y_slice, self.x_slice = z, y, x
-        return self
-
-
-    def plot(self, open_browser: bool = True, wait: float = 0.3) -> str:
+    def plot(self, open_browser: bool = True, external_browser: bool = True, wait: float = 0.3) -> str:
         """
         Launch (or reuse) the local Browzarr server and open the
         browser pointed at this config's URL params.
@@ -296,15 +226,16 @@ class Browzarr:
 
         if open_browser:
             time.sleep(wait)  # tiny buffer so server is accepting connections
-
-            if _in_jupyter():
+            if external_browser:
+                webbrowser.open(url)
+            elif _in_jupyter():
                 from IPython.display import IFrame, display
                 display(IFrame(src=url, width="100%", height=600))
             elif _in_vscode() and _open_vscode_simple_browser(url):
                 pass  # opened in VS Code's built-in tab
             else:
                 webbrowser.open(url)
-
+                print("Failed to detect environment. Defaulting to external browser.")
         return url
 
 
@@ -362,7 +293,7 @@ def build_browzarr():
         print("Copying built distribution...")
         shutil.copytree(built_out, dist_path)
 
-    print("Browzarr distribution updated successfully!")
+    print("Browzarr distribution built successfully!")
 
 def update_browzarr():
     dist_dir = importlib.resources.files("browzarr") / "web" / "dist"
@@ -388,4 +319,3 @@ def update_browzarr():
 
         shutil.copytree(extracted_root, dist_path)
     print("Succesfully updated Browzarr distribution")
-    

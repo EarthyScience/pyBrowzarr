@@ -69,7 +69,6 @@ def _content_type_for(file_path: Path) -> str:
                 return "application/json"
             return "application/octet-stream"
         
-        
 def _send_cors_headers(self):
     self.send_header("Access-Control-Allow-Origin", "*")
     self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
@@ -94,6 +93,12 @@ def make_handler(directory: str):
                 return
 
             super().do_GET()
+        def do_HEAD(self):
+            parsed = urlparse(self.path)
+            if parsed.path.startswith('/zarr/'):
+                self.handle_zarr_request(parsed, method="HEAD")
+                return
+            super().do_HEAD()
 
         def handle_file_request(self, parsed):
             qs = parse_qs(parsed.query)
@@ -232,7 +237,7 @@ def serve(port: int | None = None, open_browser: bool = True, verbose: bool = Tr
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="browzarr",
-        description="Launch the Browzarr Earth science visualization app locally.",
+        description="Launch the Browzarr locally.",
     )
     parser.add_argument(
         "--port",
