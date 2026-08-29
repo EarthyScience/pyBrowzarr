@@ -42,6 +42,14 @@ def _in_vscode() -> bool:
     """True if running inside a VS Code integrated terminal/kernel."""
     return os.environ.get("TERM_PROGRAM") == "vscode" or "VSCODE_PID" in os.environ
 
+def _in_colab() -> bool:
+    "True if running in Colab"
+    try:    
+        import google.colab
+        return True
+    except:
+        return False
+
 def _open_vscode_simple_browser(url: str) -> bool:
     """
     Ask VS Code to open its built-in Simple Browser tab via the
@@ -211,7 +219,7 @@ class Browzarr:
                                        })
 
 
-    def plot(self, open_browser: bool = True, external_browser: bool = True, wait: float = 0.3) -> str:
+    def plot(self, width=720, height=720, give_url: bool = False, external_browser: bool = False, wait: float = 0.3) -> str | None:
         """
         Launch (or reuse) the local Browzarr server and open the
         browser pointed at this config's URL params.
@@ -223,20 +231,23 @@ class Browzarr:
         url = f"http://localhost:{port}/"
         if query:
             url += f"?{query}"
-
-        if open_browser:
+        if give_url:
+            return f"https://browzarr.io/latest/?{query}"
+        else:
             time.sleep(wait)  # tiny buffer so server is accepting connections
             if external_browser:
                 webbrowser.open(url)
             elif _in_jupyter():
                 from IPython.display import IFrame, display
-                display(IFrame(src=url, width="100%", height=600))
+                display(IFrame(src=url, width=width, height=height))
             elif _in_vscode() and _open_vscode_simple_browser(url):
                 pass  # opened in VS Code's built-in tab
+            elif _in_colab():
+                from google.colab import output
+                output.serve_kernel_port_as_iframe(port, f"/?{query}", width=width, height=height)
             else:
                 webbrowser.open(url)
                 print("Failed to detect environment. Defaulting to external browser.")
-        return url
 
 
 def _check_pnpm():

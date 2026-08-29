@@ -56,10 +56,10 @@ def get_dist_dir() -> Path:
     if not dist_path.exists() or not any(dist_path.iterdir()):
         raise FileNotFoundError(
             "No frontend build found in 'web/dist'.\n"
-            "Did you run the frontend build step (e.g. `npm run build` + "
-            "copy to src/browzarr_viewer/web/dist) before installing this "
-            "package?"
+            "import and run update_browzarr() or build_browzarr()"
+            "to copy files to the dist folder"
         )
+    
 
     return dist_path
 

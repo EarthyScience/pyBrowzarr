@@ -21,7 +21,7 @@ browzarr = "browzarr:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-browzarr_viewer = ["web/dist/**/*"]
+browzarr = ["web/dist/**/*"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["web/dist/.gitkeep"]
