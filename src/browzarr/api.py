@@ -19,9 +19,9 @@ from pathlib import Path
 import re
 
 def to_spec(param_dict, plot_type: str = None) -> dict:
-        """Serialize to the JSON blob the JS frontend expects."""
-        param_dict = {"plot_type": plot_type, **param_dict} if plot_type is not None else {}
-        return {snake_to_camel(k): v for k, v in param_dict.items() if v is not None}
+    """Serialize to the JSON blob the JS frontend expects."""
+    param_dict = {"plot_type": plot_type, **param_dict} if plot_type is not None else param_dict
+    return {snake_to_camel(k): v for k, v in param_dict.items() if v is not None}
 
 
 def snake_to_camel(s: str) -> str:
@@ -123,7 +123,8 @@ class Browzarr:
     def __post_init__(self) -> None:
         self.export_plot = False
         self.reproject = False
-        self._export_state = None        
+        self._plot_state = None
+        self._export_state = None
         self.init_store = self.dataset
 
     # ---- Plot Functions ---- #
@@ -147,7 +148,7 @@ class Browzarr:
     def export(self, open_browser:bool = True, **kwargs: Unpack[Export]) -> "Browzarr":
         self._export_state = to_spec({**kwargs})
         self.export_plot = True
-        return self.plot(open_browser = open_browser)
+        return self.plot(external_browser=open_browser)
     # ---- Build States ---- #
     def _build_global_state(self) -> dict[str, Any]:
         state: dict[str, Any] = {}
@@ -173,7 +174,7 @@ class Browzarr:
         if not self.export_plot:
             return {}
         state: dict[str, Any] = {}
-        export_obj = self._export_state.to_spec() if self._export_state is not None else {}
+        export_obj = self._export_state if self._export_state is not None else {}
         for key, value in export_obj.items():
             if key == "keyframes" and value is not None:
                 ## Write to JSON file and pass path to frontend
@@ -181,10 +182,10 @@ class Browzarr:
                 with open(keyframe_path, "w") as f:
                     json.dump(value, f)
                 ## pass path as absolute path to frontend
-                self._export_state.keyframes_path = os.path.abspath(keyframe_path)
+                state["keyframesPath"] = os.path.abspath(keyframe_path)
                 continue
-            if key == 'keyframesPath' and value is not None:
-                self._export_state.keyframes_path = os.path.abspath(value)
+            if key == "keyframesPath" and value is not None:
+                state[key] = os.path.abspath(value)
                 continue
             if value is not None:
                 ## Key already camelCase from to_spec()
@@ -194,31 +195,35 @@ class Browzarr:
     # ---- Query from States ---- #
     def _build_query(self) -> str:
         es = self._build_export_state()
-        plot_spec = self._plot_state if self._plot_state is not None else {}
-        ## Exclude parameters if the 
-        full_obj = {
-            "globalState": self._build_global_state(),
-            "plotState": plot_spec,
-            "zarrState": self._build_zarr_state(),
-            **({"exportState": es} if len(es) > 0 else {}),
-        }
-        ## Reproject if dst_CRS and native_CRS provided
-        if (self._plot_state is not None
-            and getattr(self._plot_state, "native_CRS", None) is not None
-            and getattr(self._plot_state, "dest_CRS", None) is not None):
+        ## Copy so repeated .plot() calls don't mutate the config
+        plot_spec = dict(self._plot_state) if self._plot_state is not None else {}
+
+        ## Reproject if native_CRS and dest_CRS provided
+        if plot_spec.get("nativeCRS") is not None and plot_spec.get("destCRS") is not None:
             self.reproject = True
 
-        full_obj["plotState"].update(self.extra_params)
-        print(self._plot_state)
-        camera_pos = self._plot_state.pop("cameraPosition", None)
-        kfp = self._export_state.pop("keyframes_path", None)
-        return urllib.parse.urlencode({"data": json.dumps(full_obj), 
-                                       "store":self.init_store, 
-                                       "export": json.dumps(self.export_plot), 
-                                       "reproject": json.dumps(self.reproject),
-                                       **({"camera": camera_pos} if camera_pos is not None else {}),
-                                       **({"keyFramesPath": kfp} if kfp is not None else {}),
-                                       })
+        camera_pos = plot_spec.pop("cameraPosition", None)
+        kfp = es.pop("keyframesPath", None)
+
+        ## Flat query: every param at the top level, no nesting
+        query: dict[str, Any] = {}
+        query.update(self._build_global_state())
+        query.update(self._build_zarr_state())
+        query.update(plot_spec)
+        query.update(self.extra_params)
+        query.update(es)
+        if camera_pos is not None:
+            query["camera"] = camera_pos
+        if kfp is not None:
+            query["keyFramesPath"] = kfp
+        query["export"] = self.export_plot
+        query["reproject"] = self.reproject
+
+        ## Scalars pass through; bools/lists/tuples/dicts are JSON-encoded
+        return urllib.parse.urlencode(
+            {k: json.dumps(v) if isinstance(v, (bool, list, tuple, dict)) else v
+             for k, v in query.items() if v is not None}
+        )
 
 
     def plot(self, width=720, height=720, give_url: bool = False, external_browser: bool = False, wait: float = 0.3) -> str | None:
