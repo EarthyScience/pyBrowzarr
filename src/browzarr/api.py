@@ -209,12 +209,14 @@ class Browzarr:
             self.reproject = True
 
         full_obj["plotState"].update(self.extra_params)
-        
-        kfp = self._export_state.keyframes_path if self._export_state is not None else None
+        print(self._plot_state)
+        camera_pos = self._plot_state.pop("cameraPosition", None)
+        kfp = self._export_state.pop("keyframes_path", None)
         return urllib.parse.urlencode({"data": json.dumps(full_obj), 
                                        "store":self.init_store, 
                                        "export": json.dumps(self.export_plot), 
                                        "reproject": json.dumps(self.reproject),
+                                       **({"camera": camera_pos} if camera_pos is not None else {}),
                                        **({"keyFramesPath": kfp} if kfp is not None else {}),
                                        })
 
@@ -224,7 +226,7 @@ class Browzarr:
         Launch (or reuse) the local Browzarr server and open the
         browser pointed at this config's URL params.
 
-        Returns the full URL (handy for notebooks / headless use).
+        Returns the full URL.
         """
         port = BrowzarrSession._ensure_server()
         query = self._build_query()
