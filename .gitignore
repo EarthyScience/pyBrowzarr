@@ -1,7 +1,9 @@
 test.ipynb
 keyframes.json
+opencode.json
 src/browzarr/web/dist
 src/browzarr.egg-info
 src/browzarr/__pycache__
 __pycache__
 dist/
+docs/

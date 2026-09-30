@@ -1,4 +1,3 @@
-from dataclasses import dataclass, asdict
 from typing import Literal, TypedDict, NotRequired
 
 class Vector3(TypedDict):
@@ -7,7 +6,6 @@ class Vector3(TypedDict):
     z: float
 
 
-@dataclass
 class PlotBase(TypedDict):
     colormap: NotRequired[str]
     flip_colormap: NotRequired[bool]
@@ -28,9 +26,6 @@ class PlotBase(TypedDict):
     native_CRS: NotRequired[str]
     dest_CRS: NotRequired[str]
 
-    
-
-@dataclass
 class Volume(PlotBase):
     transparency: NotRequired[float]
     nan_transparency: NotRequired[float]
@@ -38,7 +33,6 @@ class Volume(PlotBase):
     use_frag_opt: NotRequired[bool]
     
 
-@dataclass
 class Points(PlotBase):
     point_size: NotRequired[float]
     time_scale: NotRequired[float]
@@ -46,20 +40,17 @@ class Points(PlotBase):
 
 
 
-@dataclass
 class Flat(PlotBase):
     displace_faces: NotRequired[bool]
     displacement: NotRequired[float]
     offset_negatives: NotRequired[bool]
+    rotate_flat: NotRequired[bool]
 
-
-@dataclass
 class Sphere(PlotBase):
     displace_faces: NotRequired[bool]
     displacement: NotRequired[float]
     offset_negatives: NotRequired[bool]
 
-@dataclass
 class Export(TypedDict):
     include_background: NotRequired[bool]
     include_colorbar: NotRequired[bool]

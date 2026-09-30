@@ -7,7 +7,7 @@ name = "browzarr"
 version = "0.1.1"
 description = "Local-server launcher for the Browzarr Earth science visualization app"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
     { name = "Jeran Poehls" }
