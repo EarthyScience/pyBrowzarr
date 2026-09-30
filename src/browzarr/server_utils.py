@@ -56,7 +56,7 @@ def get_dist_dir() -> Path:
     if not dist_path.exists() or not any(dist_path.iterdir()):
         raise FileNotFoundError(
             "No frontend build found in 'web/dist'.\n"
-            "import and run update_browzarr() or build_browzarr()"
+            "import and run use_latest() or build_browzarr()"
             "to copy files to the dist folder"
         )
     

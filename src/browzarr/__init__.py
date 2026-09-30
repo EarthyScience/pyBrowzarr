@@ -7,11 +7,12 @@ A small Python package that serves the pre-built Browzarr static frontend
 opens it in the user's browser.
 
 The actual frontend build lives in ``web/dist`` and is generated separately
-via the frontend's build tooling. After install, run update_browzarr to stay up 
-to dat with the browzarr website. 
+via the frontend's build tooling. After install, run use_latest to stay up 
+to date with the Browzarr website. 
 """
 
 from .server_utils import main
-from .api import Browzarr, update_browzarr, build_browzarr
+from .api import Browzarr, use_latest, use_version, build_browzarr
 
-__all__ = ["main", "__version__", "Browzarr", "update_browzarr", "build_browzarr"]
+__all__ = ["main", "__version__", "Browzarr", "use_latest", "use_version", "build_browzarr"]
+
