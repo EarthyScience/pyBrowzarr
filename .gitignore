@@ -6,3 +6,4 @@ src/browzarr.egg-info
 src/browzarr/__pycache__
 __pycache__
 dist/
+docs/

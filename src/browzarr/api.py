@@ -104,8 +104,6 @@ class BrowzarrSession:
 def isNC(path: str):
     return any(nc in path for nc in (".nc", ".nc4", ".netcdf"))
 
-
-
 # dataclass generates all __init__ and self values boilerplate. Just list all potential fields. 
 @dataclass
 class Browzarr:
@@ -114,7 +112,9 @@ class Browzarr:
     chain operators. When satisfied, call .plot() to launch a preconfigured Browzarr view.
     """
     dataset: str 
-    variable: str 
+    variable: str
+    variable2: str | None = None
+    share_scale: bool = False
     x_slice: tuple[int, int | None] = (0, None)
     y_slice: tuple[int, int | None] = (0, None)
     z_slice: tuple[int, int | None] = (0, None)
@@ -145,19 +145,20 @@ class Browzarr:
         return self
 
     # ---- Export Functions ---- #
-    def export(self, open_browser:bool = True, **kwargs: Unpack[Export]) -> "Browzarr":
+    def export(self, give_url: bool = False, open_browser:bool = True, **kwargs: Unpack[Export]) -> "Browzarr":
         self._export_state = to_spec({**kwargs})
         self.export_plot = True
-        return self.plot(external_browser=open_browser)
+        return self.plot(give_url=give_url, external_browser=open_browser)
     # ---- Build States ---- #
     def _build_global_state(self) -> dict[str, Any]:
         state: dict[str, Any] = {}
-
-        for key in ["init_store", "variable"]:
+        for key in ["init_store", "variable", "variable2"]:
             value = getattr(self, key)
             if value is not None:
                 state[snake_to_camel(key)] = value
-
+        if getattr(self, "variable2", None) is not None:
+            state["bivariate"] = True
+            state["shareScale"] = self.share_scale
         return state
  
     def _build_zarr_state(self) -> dict[str, Any]:
@@ -213,7 +214,7 @@ class Browzarr:
         query.update(self.extra_params)
         query.update(es)
         if camera_pos is not None:
-            query["camera"] = camera_pos
+            query["cameraPosition"] = {'x':camera_pos[0], 'y':camera_pos[1], 'z':camera_pos[2]}
         if kfp is not None:
             query["keyFramesPath"] = kfp
         query["export"] = self.export_plot

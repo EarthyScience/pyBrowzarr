@@ -26,8 +26,6 @@ class PlotBase(TypedDict):
     native_CRS: NotRequired[str]
     dest_CRS: NotRequired[str]
 
-    
-
 class Volume(PlotBase):
     transparency: NotRequired[float]
     nan_transparency: NotRequired[float]
@@ -46,7 +44,7 @@ class Flat(PlotBase):
     displace_faces: NotRequired[bool]
     displacement: NotRequired[float]
     offset_negatives: NotRequired[bool]
-
+    rotate_flat: NotRequired[bool]
 
 class Sphere(PlotBase):
     displace_faces: NotRequired[bool]
