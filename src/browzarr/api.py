@@ -258,62 +258,6 @@ class Browzarr:
                 print("Failed to detect environment. Defaulting to external browser.")
 
 
-def _check_pnpm():
-    try:
-        subprocess.run(["pnpm", "--version"], check=True, shell=True)
-        return True
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return False
-    
-def build_browzarr():
-    if not _check_pnpm():
-        print('''
-        pnpm not installed. Install it then run again
-        https://pnpm.io/installation
-        ''')
-        return
-    base_path = ""
-    dist_dir = importlib.resources.files("browzarr") / "web" / "dist"
-    dist_path = Path(str(dist_dir))
-
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        tarball = tmp_path / "source.tar.gz"
-
-        print("Downloading source from GitHub...")
-        urllib.request.urlretrieve(
-            "https://codeload.github.com/EarthyScience/Browzarr/tar.gz/refs/heads/main",
-            tarball,
-        )
-
-        print("Extracting...")
-        with tarfile.open(tarball) as tar:
-            tar.extractall(tmp_path)
-
-        extracted_root = next(tmp_path.glob("Browzarr-*"))
-        print("Installing dependencies with pnpm...")
-        subprocess.run(["pnpm", "install"], cwd=extracted_root, check=True, shell=True)
-
-        subprocess.run(
-            ["pnpm", "run", "build"],
-            cwd=extracted_root,
-            check=True,
-            env={**os.environ, "BASE_PATH": base_path},
-            shell=True
-        )
-
-        built_out = extracted_root / "out"
-
-        if dist_path.exists():
-            shutil.rmtree(dist_path)
-
-        dist_path.parent.mkdir(parents=True, exist_ok=True)
-
-        print("Copying built distribution...")
-        shutil.copytree(built_out, dist_path)
-
-    print("Browzarr distribution built successfully!")
-
 NPM_PACKAGE = "browzarr"
 NPM_REGISTRY_URL = f"https://registry.npmjs.org/{NPM_PACKAGE}"
 NPM_VERSION_MARKER = ".npm-version"

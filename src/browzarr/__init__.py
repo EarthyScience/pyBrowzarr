@@ -12,7 +12,7 @@ to date with the Browzarr website.
 """
 
 from .server_utils import main
-from .api import Browzarr, use_latest, use_version, build_browzarr
+from .api import Browzarr, use_latest, use_version
 
-__all__ = ["main", "__version__", "Browzarr", "use_latest", "use_version", "build_browzarr"]
+__all__ = ["main", "__version__", "Browzarr", "use_latest", "use_version"]
 
