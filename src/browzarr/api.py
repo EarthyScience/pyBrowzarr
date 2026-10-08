@@ -258,63 +258,120 @@ class Browzarr:
                 print("Failed to detect environment. Defaulting to external browser.")
 
 
-def _check_pnpm():
-    try:
-        subprocess.run(["pnpm", "--version"], check=True, shell=True)
-        return True
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return False
-    
-def build_browzarr():
-    if not _check_pnpm():
-        print('''
-        pnpm not installed. Install it then run again
-        https://pnpm.io/installation
-        ''')
-        return
-    base_path = ""
+NPM_PACKAGE = "browzarr"
+NPM_REGISTRY_URL = f"https://registry.npmjs.org/{NPM_PACKAGE}"
+NPM_VERSION_MARKER = ".npm-version"
+
+def _dist_path() -> Path:
     dist_dir = importlib.resources.files("browzarr") / "web" / "dist"
-    dist_path = Path(str(dist_dir))
+    return Path(str(dist_dir))
+
+def _installed_npm_version() -> str | None:
+    marker = _dist_path() / NPM_VERSION_MARKER
+    if marker.exists():
+        return marker.read_text(encoding="utf-8").strip() or None
+    return None
+
+def _npm_versions() -> list[str]:
+    with urllib.request.urlopen(NPM_REGISTRY_URL, timeout=30) as resp:
+        data = json.load(resp)
+    return list(data["versions"].keys())
+
+def _latest_npm_version() -> str:
+    with urllib.request.urlopen(NPM_REGISTRY_URL, timeout=30) as resp:
+        data = json.load(resp)
+    return data["dist-tags"]["latest"]
+
+def _version_key(v: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in re.findall(r"\d+", v)) or (0,)
+
+def _version_matches(requested: str, candidate: str) -> bool:
+    ## PEP 440 style: "0.8" matches "0.8.0" (zero-padded equality)
+    req, cand = _version_key(requested), _version_key(candidate)
+    size = max(len(req), len(cand))
+    return req + (0,) * (size - len(req)) == cand + (0,) * (size - len(cand))
+
+def _resolve_npm_version(requested: str) -> str:
+    """Resolve a requested version to a real npm release.
+
+    Exact match (zero-padded, so "0.8" resolves to "0.8.0") wins; otherwise
+    the nearest release at or below the request is used, falling back to the
+    oldest release if the request predates everything.
+    """
+    available = _npm_versions()
+    for v in available:
+        if _version_matches(requested, v):
+            return v
+    req = _version_key(requested)
+    lower = [v for v in available if _version_key(v) <= req]
+    if lower:
+        pick = max(lower, key=_version_key)
+    else:
+        pick = min(available, key=_version_key)
+    print(f"browzarr {requested} not found on npm, using nearest version {pick}")
+    return pick
+
+def _fetch_npm_dist(version: str) -> None:
+    dist_path = _dist_path()
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        tarball = tmp_path / "source.tar.gz"
-
-        print("Downloading source from GitHub...")
+        tarball = tmp_path / "browzarr.tgz"
         urllib.request.urlretrieve(
-            "https://codeload.github.com/EarthyScience/Browzarr/tar.gz/refs/heads/main",
+            f"{NPM_REGISTRY_URL}/-/{NPM_PACKAGE}-{version}.tgz",
             tarball,
         )
-
-        print("Extracting...")
+        print("Extracting built site files...")
         with tarfile.open(tarball) as tar:
-            tar.extractall(tmp_path)
+            members = [m for m in tar.getmembers() if m.name.startswith("package/out/")]
+            try:
+                tar.extractall(tmp_path, members=members, filter="data")
+            except TypeError:
+                tar.extractall(tmp_path, members=members)
 
-        extracted_root = next(tmp_path.glob("Browzarr-*"))
-        print("Installing dependencies with pnpm...")
-        subprocess.run(["pnpm", "install"], cwd=extracted_root, check=True, shell=True)
-
-        subprocess.run(
-            ["pnpm", "run", "build"],
-            cwd=extracted_root,
-            check=True,
-            env={**os.environ, "BASE_PATH": base_path},
-            shell=True
-        )
-
-        built_out = extracted_root / "out"
+        built_out = tmp_path / "package" / "out"
 
         if dist_path.exists():
             shutil.rmtree(dist_path)
-
         dist_path.parent.mkdir(parents=True, exist_ok=True)
 
-        print("Copying built distribution...")
         shutil.copytree(built_out, dist_path)
+        (dist_path / NPM_VERSION_MARKER).write_text(version, encoding="utf-8")
 
-    print("Browzarr distribution built successfully!")
 
-def update_browzarr():
+def use_latest(from_github=False) -> str:
+    """Fetch the latest published browzarr site build from npm or github into web/dist."""
+    if from_github:
+        _fetch_github()
+        return "latest github build"
+    version = _latest_npm_version()
+    installed_version = _installed_npm_version()
+    if version == installed_version:
+        print("No updates from NPM")
+        return version
+    print(f"Fetching browzarr {version} from npm...")
+    _fetch_npm_dist(version)
+    print(f"Browzarr distribution updated to {version}")
+    return version
+
+def use_version(version: str = "latest") -> str:
+    """
+    Fetch a specific published browzarr site build from npm into web/dist.
+
+    Accepts any released version string (e.g. "0.8.0" or "0.8"). If the
+    requested version doesn't exist, the nearest release at or below it is
+    used, mirroring pip's version resolution. "latest" grabs the newest
+    release. Returns the version actually installed.
+    """
+    if version == "latest":
+        return use_latest()
+    resolved = _resolve_npm_version(version)
+    print(f"Fetching browzarr {resolved} from npm...")
+    _fetch_npm_dist(resolved)
+    print(f"Browzarr distribution updated to {resolved}")
+    return resolved
+
+def _fetch_github():
     dist_dir = importlib.resources.files("browzarr") / "web" / "dist"
     dist_path = Path(str(dist_dir))
 
@@ -337,4 +394,5 @@ def update_browzarr():
         dist_path.parent.mkdir(parents=True, exist_ok=True)
 
         shutil.copytree(extracted_root, dist_path)
+    (dist_path / NPM_VERSION_MARKER).write_text("latest github", encoding="utf-8")
     print("Succesfully updated Browzarr distribution")
